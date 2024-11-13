@@ -1,7 +1,8 @@
 import React, {useEffect, useState} from 'react';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Input} from '@/components/ui/input';
-import {Button} from '@/components/ui/button';
+import { Alert, AlertDescription } from './components/ui/alert';
+import { Button } from './components/ui/button';
 import {CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis} from 'recharts';
 import {ArrowUpDown, Plus, Trash2} from 'lucide-react';
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue,} from "@/components/ui/select";
@@ -28,7 +29,7 @@ const CryptoTracker = () => {
 
     // URL parameter handling
     const updateUrlParams = (addrs) => {
-        const url = new URL(window.location);
+        const url = new URL(window.location.toString());
         if (addrs.length > 0) {
             url.searchParams.set('addresses', addrs.join(','));
         } else {
@@ -39,7 +40,8 @@ const CryptoTracker = () => {
 
     // Load addresses from URL on mount
     useEffect(() => {
-        const url = new URL(window.location);
+        const url = new URL(window.location.toString());
+
         const addressParam = url.searchParams.get('addresses');
         if (addressParam) {
             const initialAddresses = addressParam.split(',').filter(addr => addr.trim());
@@ -76,7 +78,8 @@ const CryptoTracker = () => {
     // Handle browser back/forward
     useEffect(() => {
         const handlePopState = () => {
-            const url = new URL(window.location);
+            const url = new URL(window.location.toString());
+
             const addressParam = url.searchParams.get('addresses');
             if (addressParam) {
                 setAddresses(addressParam.split(',').filter(addr => addr.trim()));
