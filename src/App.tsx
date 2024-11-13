@@ -351,7 +351,7 @@ const CryptoTracker = () => {
         let runningCurrentSum = 0;
 
         const chartData = Object.values(dailyData)
-            .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
             .map(day => {
                 runningDepositSum += day.depositValueEur;
                 runningCurrentSum += day.valueEur;
