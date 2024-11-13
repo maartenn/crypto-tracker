@@ -148,7 +148,7 @@ const CryptoTracker = () => {
             return priceMap;
         } catch (error) {
             console.error('Price fetch error:', error);
-            throw new Error(`Error fetching price data: ${error.message}`);
+            throw new Error(`Error fetching price  ${error.message}`);
         }
     };
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -314,11 +314,18 @@ const CryptoTracker = () => {
     };
 
     const updateChartData = (txs, prices) => {
-        const dailyData = {};
+        const dailyData: {[key: string]: {
+            timestamp: string;
+            valueEur: number;
+            depositValueEur: number;
+            cumulativeValueEur: number;
+            cumulativeDepositValueEur: number;
+            cumulativeSats: number;
+        }} = {};
         let cumulativeSats = 0;
 
         // Sort transactions by date first
-        const sortedTxs = [...txs].sort((a, b) => a.timestamp - b.timestamp);
+        const sortedTxs = [...txs].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
         sortedTxs.forEach(tx => {
             const date = tx.timestamp.toISOString().split('T')[0];
@@ -367,7 +374,11 @@ const CryptoTracker = () => {
 
 // Update yearly summary data
     const updateYearlyData = (txs) => {
-        const yearlyStats = {};
+        const yearlyStats: {[key: number]: {
+            year: number;
+            totalValue: number;
+            deposits: number;
+        }} = {};
         txs.forEach(tx => {
             const year = tx.timestamp.getFullYear();
             if (!yearlyStats[year]) {
