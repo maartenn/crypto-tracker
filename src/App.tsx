@@ -1,8 +1,7 @@
 import React, {useEffect, useState} from 'react';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Input} from '@/components/ui/input';
-import { Alert, AlertDescription } from './components/ui/alert';
-import { Button } from './components/ui/button';
+import {Button} from '@/components/ui/button';
 import {CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis} from 'recharts';
 import {ArrowUpDown, Plus, Trash2} from 'lucide-react';
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue,} from "@/components/ui/select";
@@ -29,7 +28,7 @@ const CryptoTracker = () => {
 
     // URL parameter handling
     const updateUrlParams = (addrs) => {
-        const url = new URL(window.location.toString());
+        const url = new URL(window.location);
         if (addrs.length > 0) {
             url.searchParams.set('addresses', addrs.join(','));
         } else {
@@ -40,8 +39,7 @@ const CryptoTracker = () => {
 
     // Load addresses from URL on mount
     useEffect(() => {
-        const url = new URL(window.location.toString());
-
+        const url = new URL(window.location);
         const addressParam = url.searchParams.get('addresses');
         if (addressParam) {
             const initialAddresses = addressParam.split(',').filter(addr => addr.trim());
@@ -78,8 +76,7 @@ const CryptoTracker = () => {
     // Handle browser back/forward
     useEffect(() => {
         const handlePopState = () => {
-            const url = new URL(window.location.toString());
-
+            const url = new URL(window.location);
             const addressParam = url.searchParams.get('addresses');
             if (addressParam) {
                 setAddresses(addressParam.split(',').filter(addr => addr.trim()));
@@ -148,7 +145,7 @@ const CryptoTracker = () => {
             return priceMap;
         } catch (error) {
             console.error('Price fetch error:', error);
-            throw new Error(`Error fetching price  ${error.message}`);
+            throw new Error(`Error fetching price data: ${error.message}`);
         }
     };
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -315,20 +312,35 @@ const CryptoTracker = () => {
 
     const updateChartData = (txs, prices) => {
         const dailyData: {[key: string]: {
-            timestamp: string;
-            valueEur: number;
-            depositValueEur: number;
-            cumulativeValueEur: number;
-            cumulativeDepositValueEur: number;
-            cumulativeSats: number;
-        }} = {};
+                timestamp: string;
+                valueEur: number;
+                depositValueEur: number;
+                historicalValueEur: number;
+                cumulativeValueEur: number;
+                cumulativeDepositValueEur: number;
+                cumulativeHistoricalValueEur: number;
+                cumulativeSats: number;
+            }} = {};
+
         let cumulativeSats = 0;
 
         // Sort transactions by date first
         const sortedTxs = [...txs].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
+        // Get the latest price timestamp for current value calculation
+        const latestPriceTimestamp = Math.max(...Object.keys(prices).map(Number));
+        const currentPrice = prices[latestPriceTimestamp];
+
         sortedTxs.forEach(tx => {
             const date = tx.timestamp.toISOString().split('T')[0];
+            const txTimestampSeconds = Math.floor(tx.timestamp.getTime() / 1000);
+
+            // Find closest historical price for this date
+            const closestPriceTimestamp = Object.keys(prices)
+                .map(Number)
+                .filter(t => t <= txTimestampSeconds)
+                .reduce((a, b) => Math.abs(b - txTimestampSeconds) < Math.abs(a - txTimestampSeconds) ? b : a);
+
             cumulativeSats += tx.amount;
 
             if (!dailyData[date]) {
@@ -336,13 +348,19 @@ const CryptoTracker = () => {
                     timestamp: date,
                     valueEur: 0,
                     depositValueEur: 0,
+                    historicalValueEur: 0,
                     cumulativeValueEur: 0,
                     cumulativeDepositValueEur: 0,
+                    cumulativeHistoricalValueEur: 0,
                     cumulativeSats: 0,
                 };
             }
+
+            // Calculate the historical portfolio value using the price at that time
+            const historicalPrice = prices[closestPriceTimestamp];
             dailyData[date].valueEur += tx.currentValueEur;
             dailyData[date].depositValueEur += tx.valueEur;
+            dailyData[date].historicalValueEur = (cumulativeSats * historicalPrice) / 100000000;
             dailyData[date].cumulativeSats = cumulativeSats;
         });
 
@@ -358,27 +376,37 @@ const CryptoTracker = () => {
                 return {
                     ...day,
                     cumulativeValueEur: runningCurrentSum,
-                    cumulativeDepositValueEur: runningDepositSum
+                    cumulativeDepositValueEur: runningDepositSum,
+                    cumulativeHistoricalValueEur: day.historicalValueEur // This is already the cumulative value at historical prices
                 };
             });
 
-        console.log('Chart data with cumulative values:', {
-            firstDate: chartData[0]?.timestamp,
-            lastDate: chartData[chartData.length - 1]?.timestamp,
-            totalPoints: chartData.length,
-            finalCumulativeValue: chartData[chartData.length - 1]?.cumulativeValueEur
-        });
+        // Add current date point if there are any transactions
+        if (chartData.length > 0) {
+            const lastEntry = chartData[chartData.length - 1];
+            const today = new Date().toISOString().split('T')[0];
+
+            // Only add current date if it's different from the last entry
+            if (today !== lastEntry.timestamp) {
+                chartData.push({
+                    timestamp: today,
+                    valueEur: 0,
+                    depositValueEur: 0,
+                    historicalValueEur: (lastEntry.cumulativeSats * currentPrice) / 100000000,
+                    cumulativeValueEur: lastEntry.cumulativeValueEur,
+                    cumulativeDepositValueEur: lastEntry.cumulativeDepositValueEur,
+                    cumulativeHistoricalValueEur: (lastEntry.cumulativeSats * currentPrice) / 100000000,
+                    cumulativeSats: lastEntry.cumulativeSats
+                });
+            }
+        }
 
         setChartData(chartData);
     };
 
 // Update yearly summary data
     const updateYearlyData = (txs) => {
-        const yearlyStats: {[key: number]: {
-            year: number;
-            totalValue: number;
-            deposits: number;
-        }} = {};
+        const yearlyStats = {};
         txs.forEach(tx => {
             const year = tx.timestamp.getFullYear();
             if (!yearlyStats[year]) {
@@ -451,6 +479,12 @@ const CryptoTracker = () => {
                 <CardHeader>
                     <div className="flex justify-between items-center">
                         <CardTitle>Bitcoin Holdings Tracker</CardTitle>
+                        <p className="text-sm text-muted-foreground">
+                            Track your Bitcoin journey by adding your addresses. See how your holdings have grown over time,
+                            analyze your historical returns, and view your complete transaction history. The chart shows your
+                            total portfolio value at each point in time (blue), your cumulative deposits (gray), and your
+                            total Bitcoin amount in sats (green).
+                        </p>
                         {addresses.length > 0 && (
                             <Button
                                 variant="outline"
@@ -604,16 +638,16 @@ const CryptoTracker = () => {
                                             <Legend/>
                                             <Line
                                                 type="monotone"
-                                                dataKey="cumulativeValueEur"
+                                                dataKey="cumulativeHistoricalValueEur"
                                                 stroke="#2563eb"
-                                                name="Cumulative Current Value"
+                                                name="Portfolio Value"
                                                 yAxisId="left"
                                             />
                                             <Line
                                                 type="monotone"
                                                 dataKey="cumulativeDepositValueEur"
                                                 stroke="#64748b"
-                                                name="Cumulative Deposit Value"
+                                                name="Deposit Value"
                                                 yAxisId="left"
                                             />
                                             <Line
