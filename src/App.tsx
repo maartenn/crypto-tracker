@@ -7,7 +7,64 @@ import {CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XA
 import {ArrowUpDown, Loader2, Plus, Trash2} from 'lucide-react';
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue,} from "@/components/ui/select";
 import {Progress} from "@/components/ui/progress";
+interface Transaction {
+    txid: string;
+    timestamp: Date;
+    amount: number;
+    valueEur: number;
+    valueUsd: number;
+    currentValueEur: number;
+    currentValueUsd: number;
+}
 
+interface ChartDataPoint {
+    timestamp: string;
+    valueEur: number;
+    valueUsd: number;
+    depositValueEur: number;
+    depositValueUsd: number;
+    historicalValueEur: number;
+    historicalValueUsd: number;
+    cumulativeSats: number;
+    cumulativeValueEur: number;
+    cumulativeValueUsd: number;
+    cumulativeDepositValueEur: number;
+    cumulativeDepositValueUsd: number;
+    cumulativeHistoricalValueEur: number;
+    cumulativeHistoricalValueUsd: number;
+}
+
+interface YearlyStats {
+    year: number;
+    totalValue: number;
+    totalValueUsd: number;
+    deposits: number;
+    depositsUsd: number;
+    profitEur: string;
+    profitUsd: string;
+}
+
+interface PriceData {
+    EUR: { [timestamp: string]: number };
+    USD: { [timestamp: string]: number };
+}
+
+interface DailyDataPoint {
+    timestamp: string;
+    valueEur: number;
+    valueUsd: number;
+    depositValueEur: number;
+    depositValueUsd: number;
+    historicalValueEur: number;
+    historicalValueUsd: number;
+    cumulativeValueEur: number;
+    cumulativeValueUsd: number;
+    cumulativeDepositValueEur: number;
+    cumulativeDepositValueUsd: number;
+    cumulativeHistoricalValueEur: number;
+    cumulativeHistoricalValueUsd: number;
+    cumulativeSats: number;
+}
 const API_ENDPOINTS = {
     BLOCKSTREAM: 'https://blockstream.info/api',
     COINGECKO: 'https://api.coingecko.com/api/v3'
@@ -15,12 +72,12 @@ const API_ENDPOINTS = {
 const CryptoTracker = () => {
     const [addresses, setAddresses] = useState([]);
     const [newAddress, setNewAddress] = useState('');
-    const [transactions, setTransactions] = useState([]);
+    const [transactions, setTransactions] = useState<Transaction[]>([]);
+    const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
+    const [yearlyData, setYearlyData] = useState<YearlyStats[]>([]);
     const [priceData, setPriceData] = useState({});
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
-    const [chartData, setChartData] = useState([]);
-    const [yearlyData, setYearlyData] = useState([]);
     const [sortConfig, setSortConfig] = useState({key: 'timestamp', direction: 'desc'});
     const [filterYear, setFilterYear] = useState('all');
     const [loadingProgress, setLoadingProgress] = useState(0);
@@ -392,8 +449,10 @@ const CryptoTracker = () => {
 
 
 
-    const updateChartData = (txs, prices) => {
-        const dailyData = {};
+
+// The typed function
+    const updateChartData = (txs: Transaction[], prices: PriceData): void => {
+        const dailyData: { [date: string]: DailyDataPoint } = {};
         let cumulativeSats = 0;
 
         // Sort transactions by date
@@ -453,7 +512,6 @@ const CryptoTracker = () => {
         let runningCurrentEur = 0;
         let runningCurrentUsd = 0;
 
-        // Update the relevant part in updateChartData where the chart data is created
         const chartData = Object.values(dailyData)
             .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
             .map(day => {
@@ -472,7 +530,7 @@ const CryptoTracker = () => {
                 };
             });
 
-// When adding the current date point
+        // Add current date point if needed
         if (chartData.length > 0) {
             const lastEntry = chartData[chartData.length - 1];
             const today = new Date().toISOString().split('T')[0];
@@ -499,39 +557,55 @@ const CryptoTracker = () => {
     };
 
 // Update yearly summary data
-    const updateYearlyData = (txs) => {
-        const yearlyStats = {};
+    const updateYearlyData = (txs: Transaction[]) => {
+        const yearlyStats: {
+            [key: number]: {
+                year: number;
+                totalValue: number;
+                totalValueUsd: number;
+                deposits: number;
+                depositsUsd: number;
+            }
+        } = {};
+
+        // Process all transactions
         txs.forEach(tx => {
             const year = tx.timestamp.getFullYear();
+
             if (!yearlyStats[year]) {
                 yearlyStats[year] = {
                     year,
                     totalValue: 0,
                     totalValueUsd: 0,
                     deposits: 0,
-                    depositsUsd: 0,
+                    depositsUsd: 0
                 };
             }
+
+            // Add current values
             yearlyStats[year].totalValue += tx.currentValueEur;
             yearlyStats[year].totalValueUsd += tx.currentValueUsd;
+
+            // Add deposit values
             yearlyStats[year].deposits += tx.valueEur;
             yearlyStats[year].depositsUsd += tx.valueUsd;
         });
 
-        // Calculate profit for both currencies
-        const yearlyData = Object.values(yearlyStats).map(stat => ({
-            ...stat,
-            profitEur: stat.deposits > 0
-                ? ((stat.totalValue - stat.deposits) / stat.deposits * 100).toFixed(2)
-                : '0.00',
-            profitUsd: stat.depositsUsd > 0
-                ? ((stat.totalValueUsd - stat.depositsUsd) / stat.depositsUsd * 100).toFixed(2)
-                : '0.00'
-        }));
+        // Convert to array and calculate profit percentages
+        const yearlyData: YearlyStats[] = Object.values(yearlyStats)
+            .map(stat => ({
+                ...stat,
+                profitEur: stat.deposits > 0
+                    ? ((stat.totalValue - stat.deposits) / stat.deposits * 100).toFixed(2)
+                    : '0.00',
+                profitUsd: stat.depositsUsd > 0
+                    ? ((stat.totalValueUsd - stat.depositsUsd) / stat.depositsUsd * 100).toFixed(2)
+                    : '0.00'
+            }))
+            .sort((a, b) => b.year - a.year); // Sort by year descending
 
         setYearlyData(yearlyData);
     };
-
 
     // Sort handler for tables
     const handleSort = (key) => {
@@ -542,13 +616,23 @@ const CryptoTracker = () => {
     };
 
     // Calculate totals
-    const calculateProfitLoss = () => {
+    interface ProfitLoss {
+        totalDepositsEur: number;
+        totalDepositsUsd: number;
+        currentValueEur: number;
+        currentValueUsd: number;
+        profitPercentageEur: number;
+        profitPercentageUsd: number;
+    }
+
+    const calculateProfitLoss = (): ProfitLoss => {
         const totalDepositsEur = transactions.reduce((sum, tx) => sum + tx.valueEur, 0);
         const totalDepositsUsd = transactions.reduce((sum, tx) => sum + tx.valueUsd, 0);
         const currentValueEur = transactions.reduce((sum, tx) => sum + tx.currentValueEur, 0);
         const currentValueUsd = transactions.reduce((sum, tx) => sum + tx.currentValueUsd, 0);
         const profitPercentageEur = totalDepositsEur ? ((currentValueEur - totalDepositsEur) / totalDepositsEur * 100) : 0;
         const profitPercentageUsd = totalDepositsUsd ? ((currentValueUsd - totalDepositsUsd) / totalDepositsUsd * 100) : 0;
+
         return {
             totalDepositsEur,
             totalDepositsUsd,
@@ -565,7 +649,7 @@ const CryptoTracker = () => {
         }
     }, [addresses]);
 
-    const {totalDeposits, currentValue, profitPercentage} = calculateProfitLoss();
+    
 
     // Sort and filter transactions for display
     const getSortedTransactions = () => {
@@ -744,11 +828,11 @@ const CryptoTracker = () => {
                                                 label={{value: 'Sats', angle: 90, position: 'insideRight'}}
                                             />
                                             <Tooltip
-                                                formatter={(value, name) => {
+                                                formatter={(value: number, name: string) => {
                                                     if (name === "Cumulative Sats") {
                                                         return `${value.toLocaleString()} sats`;
                                                     }
-                                                    return `${name.includes('USD') ? '$' : '€'}${value.toLocaleString(undefined, {maximumFractionDigits: 2})}`;
+                                                    return `${String(name).includes('USD') ? '$' : '€'}${value.toLocaleString(undefined, {maximumFractionDigits: 2})}`;
                                                 }}
                                             />
                                             <Legend
