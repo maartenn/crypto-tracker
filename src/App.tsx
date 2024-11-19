@@ -1,12 +1,12 @@
 import React, {useEffect, useState} from 'react';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Input} from '@/components/ui/input';
-import {Button} from '@/components/ui/button';
+import {Alert, AlertDescription} from './components/ui/alert';
+import {Button} from './components/ui/button';
 import {CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis} from 'recharts';
-import {ArrowUpDown, Plus, Trash2} from 'lucide-react';
+import {ArrowUpDown, Loader2, Plus, Trash2} from 'lucide-react';
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue,} from "@/components/ui/select";
-import { Progress } from "@/components/ui/progress";
-import { Loader2 } from 'lucide-react';
+import {Progress} from "@/components/ui/progress";
 
 const API_ENDPOINTS = {
     BLOCKSTREAM: 'https://blockstream.info/api',
@@ -25,10 +25,58 @@ const CryptoTracker = () => {
     const [filterYear, setFilterYear] = useState('all');
     const [loadingProgress, setLoadingProgress] = useState(0);
     const [loadingStatus, setLoadingStatus] = useState('');
+// Add a new state at the top of your component to track visible lines
+    const [visibleLines, setVisibleLines] = useState({
+        portfolioEUR: true,
+        portfolioUSD: true,
+        depositEUR: true,
+        depositUSD: true,
+        sats: true
+    });
+
+    const handleLegendClick = (entry) => {
+        const lineKey = {
+            "Portfolio Value (EUR)": "portfolioEUR",
+            "Portfolio Value (USD)": "portfolioUSD",
+            "Deposit Value (EUR)": "depositEUR",
+            "Deposit Value (USD)": "depositUSD",
+            "Cumulative Sats": "sats"
+        }[entry.value];
+
+        if (lineKey) {
+            setVisibleLines(prev => {
+                // Check if this is the last visible line
+                const visibleCount = Object.values(prev).filter(Boolean).length;
+                if (visibleCount === 1 && prev[lineKey]) {
+                    return prev; // Don't allow hiding the last visible line
+                }
+                return {
+                    ...prev,
+                    [lineKey]: !prev[lineKey]
+                };
+            });
+        }
+    };
+
+// Enhanced legend style
+    const legendStyle = {
+        cursor: 'pointer',
+        '.recharts-legend-item': {
+            cursor: 'pointer',
+            transition: 'opacity 0.2s',
+            '&:hover': {
+                opacity: 0.7
+            }
+        },
+        '.recharts-legend-item.inactive': {
+            opacity: 0.3
+        }
+    };
+
 
     // URL parameter handling
     const updateUrlParams = (addrs) => {
-        const url = new URL(window.location);
+        const url = new URL(window.location.toString());
         if (addrs.length > 0) {
             url.searchParams.set('addresses', addrs.join(','));
         } else {
@@ -39,7 +87,8 @@ const CryptoTracker = () => {
 
     // Load addresses from URL on mount
     useEffect(() => {
-        const url = new URL(window.location);
+        const url = new URL(window.location.toString());
+
         const addressParam = url.searchParams.get('addresses');
         if (addressParam) {
             const initialAddresses = addressParam.split(',').filter(addr => addr.trim());
@@ -76,7 +125,8 @@ const CryptoTracker = () => {
     // Handle browser back/forward
     useEffect(() => {
         const handlePopState = () => {
-            const url = new URL(window.location);
+            const url = new URL(window.location.toString());
+
             const addressParam = url.searchParams.get('addresses');
             if (addressParam) {
                 setAddresses(addressParam.split(',').filter(addr => addr.trim()));
@@ -102,6 +152,54 @@ const CryptoTracker = () => {
                 .catch(console.error);
         }
     };
+    const fetchPriceData = async (timestamps) => {
+        try {
+            const [eurResponse, usdResponse] = await Promise.all([
+                fetch('https://mempool.space/api/v1/historical-price?currency=EUR'),
+                fetch('https://mempool.space/api/v1/historical-price?currency=USD')
+            ]);
+
+            if (!eurResponse.ok || !usdResponse.ok)
+                throw new Error('Failed to fetch price data');
+
+            const eurData = await eurResponse.json();
+            const usdData = await usdResponse.json();
+
+            console.log('Raw EUR data:', eurData);
+            console.log('Raw USD data:', usdData);
+
+            // Create price maps for both currencies
+            const priceMap = {
+                EUR: {},
+                USD: {}
+            };
+
+            // Process EUR prices
+            eurData.prices.forEach(dataPoint => {
+                priceMap.EUR[dataPoint.time] = dataPoint.EUR;
+            });
+
+            // Process USD prices
+            usdData.prices.forEach(dataPoint => {
+                priceMap.USD[dataPoint.time] = dataPoint.USD;
+            });
+
+            // Debug logging
+            const timestamps = Object.keys(priceMap.EUR).map(Number);
+            console.log('Processed price timestamps:', {
+                first: new Date(timestamps[0] * 1000),
+                last: new Date(timestamps[timestamps.length - 1] * 1000),
+                count: timestamps.length,
+                sampleEUR: priceMap.EUR[timestamps[0]],
+                sampleUSD: priceMap.USD[timestamps[0]]
+            });
+
+            return priceMap;
+        } catch (error) {
+            console.error('Price fetch error:', error);
+            throw new Error(`Error fetching prices: ${error.message}`);
+        }
+    };
     // Calculate transaction amount (simplified version)
     const calculateTxAmount = (tx, address) => {
         let amount = 0;
@@ -119,37 +217,80 @@ const CryptoTracker = () => {
         });
         return amount;
     };
-    const fetchPriceData = async (timestamps) => {
+
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    const processTransactions = async () => {
+        setLoading(true);
+        setError('');
         try {
-            const response = await fetch('https://mempool.space/api/v1/historical-price?currency=EUR');
-            if (!response.ok) throw new Error('Failed to fetch price data');
-            const data = await response.json();
+            const allTxs = await Promise.all(
+                addresses.map(address => fetchTransactions(address))
+            );
+            const flatTxs = allTxs.flat();
 
-            // Debug the actual data structure
-            console.log('Raw Mempool response:', data);
-
-            // The prices are in an array with timestamps
-            const priceMap = data.prices.reduce((acc, price) => {
-                // Each price object should have a timestamp and EUR value
-                acc[price.time] = price.EUR;
-                return acc;
-            }, {});
-
-            // Debug the processed price map
-            console.log('Processed price map:', {
-                firstEntry: Object.entries(priceMap)[0],
-                lastEntry: Object.entries(priceMap)[Object.entries(priceMap).length - 1],
-                totalEntries: Object.keys(priceMap).length
+            // Debug timestamp from transaction
+            console.log('Transaction timestamp example:', {
+                original: flatTxs[0]?.timestamp,
+                inSeconds: Math.floor(flatTxs[0]?.timestamp.getTime() / 1000)
             });
 
-            return priceMap;
+            const timestamps = flatTxs.map(tx => Math.floor(tx.timestamp.getTime() / 1000));
+            const prices = await fetchPriceData(timestamps);
+            const priceTimestamps = Object.keys(prices).map(Number);
+
+            console.log('Available price timestamps:', {
+                first: new Date(priceTimestamps[0] * 1000),
+                last: new Date(priceTimestamps[priceTimestamps.length - 1] * 1000),
+                count: priceTimestamps.length
+            });
+
+
+// Modify the processTransactions function to include USD values
+            // Update the fetchPriceData function to properly handle timestamps
+
+
+// Update the price matching logic in processTransactions
+            const processedTxs = flatTxs.map(tx => {
+                const txTimestampSeconds = Math.floor(tx.timestamp.getTime() / 1000);
+
+                // Get all available timestamps
+                const timestamps = Object.keys(prices.EUR).map(Number);
+
+                // Find closest timestamp for transaction price
+                const closestPastTimestamp = timestamps
+                    .filter(t => t <= txTimestampSeconds)
+                    .reduce((a, b) => Math.abs(b - txTimestampSeconds) < Math.abs(a - txTimestampSeconds) ? b : a,
+                        timestamps[0]);
+
+                const latestTimestamp = Math.max(...timestamps);
+
+                // Debug logging
+                console.log('Price matching:', {
+                    txTime: new Date(txTimestampSeconds * 1000),
+                    closestTime: new Date(closestPastTimestamp * 1000),
+                    eurPrice: prices.EUR[closestPastTimestamp],
+                    usdPrice: prices.USD[closestPastTimestamp]
+                });
+
+                return {
+                    ...tx,
+                    valueEur: (tx.amount * prices.EUR[closestPastTimestamp]) / 100000000,
+                    valueUsd: (tx.amount * prices.USD[closestPastTimestamp]) / 100000000,
+                    currentValueEur: (tx.amount * prices.EUR[latestTimestamp]) / 100000000,
+                    currentValueUsd: (tx.amount * prices.USD[latestTimestamp]) / 100000000,
+                };
+            });
+            setTransactions(processedTxs);
+            setPriceData(prices);
+            updateChartData(processedTxs, prices);
+            updateYearlyData(processedTxs);
         } catch (error) {
-            console.error('Price fetch error:', error);
-            throw new Error(`Error fetching price data: ${error.message}`);
+            console.error('Processing error:', error);
+            setError(error.message);
+        } finally {
+            setLoading(false);
         }
     };
-    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 
     const fetchTransactions = async (address) => {
         try {
@@ -248,96 +389,28 @@ const CryptoTracker = () => {
             throw error;
         }
     };
-    const processTransactions = async () => {
-        setLoading(true);
-        setError('');
-        try {
-            const allTxs = await Promise.all(
-                addresses.map(address => fetchTransactions(address))
-            );
-            const flatTxs = allTxs.flat();
 
-            // Debug timestamp from transaction
-            console.log('Transaction timestamp example:', {
-                original: flatTxs[0]?.timestamp,
-                inSeconds: Math.floor(flatTxs[0]?.timestamp.getTime() / 1000)
-            });
 
-            const timestamps = flatTxs.map(tx => Math.floor(tx.timestamp.getTime() / 1000));
-            const prices = await fetchPriceData(timestamps);
-            const priceTimestamps = Object.keys(prices).map(Number);
-
-            console.log('Available price timestamps:', {
-                first: new Date(priceTimestamps[0] * 1000),
-                last: new Date(priceTimestamps[priceTimestamps.length - 1] * 1000),
-                count: priceTimestamps.length
-            });
-
-            const processedTxs = flatTxs.map(tx => {
-                const txTimestampSeconds = Math.floor(tx.timestamp.getTime() / 1000);
-
-                // Find closest timestamp for transaction price
-                const closestPastTimestamp = priceTimestamps
-                    .filter(t => t <= txTimestampSeconds)
-                    .reduce((a, b) => Math.abs(b - txTimestampSeconds) < Math.abs(a - txTimestampSeconds) ? b : a,
-                        priceTimestamps[0]);
-
-                const latestTimestamp = Math.max(...priceTimestamps);
-
-                console.log('Price matching for tx:', {
-                    txTime: new Date(txTimestampSeconds * 1000),
-                    closestPriceTime: new Date(closestPastTimestamp * 1000),
-                    priceAtTx: prices[closestPastTimestamp],
-                    currentPrice: prices[latestTimestamp]
-                });
-
-                return {
-                    ...tx,
-                    valueEur: (tx.amount * prices[closestPastTimestamp]) / 100000000,
-                    currentValueEur: (tx.amount * prices[latestTimestamp]) / 100000000,
-                };
-            });
-
-            setTransactions(processedTxs);
-            setPriceData(prices);
-            updateChartData(processedTxs, prices);
-            updateYearlyData(processedTxs);
-        } catch (error) {
-            console.error('Processing error:', error);
-            setError(error.message);
-        } finally {
-            setLoading(false);
-        }
-    };
 
     const updateChartData = (txs, prices) => {
-        const dailyData: {[key: string]: {
-                timestamp: string;
-                valueEur: number;
-                depositValueEur: number;
-                historicalValueEur: number;
-                cumulativeValueEur: number;
-                cumulativeDepositValueEur: number;
-                cumulativeHistoricalValueEur: number;
-                cumulativeSats: number;
-            }} = {};
-
+        const dailyData = {};
         let cumulativeSats = 0;
 
-        // Sort transactions by date first
+        // Sort transactions by date
         const sortedTxs = [...txs].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
-        // Get the latest price timestamp for current value calculation
-        const latestPriceTimestamp = Math.max(...Object.keys(prices).map(Number));
-        const currentPrice = prices[latestPriceTimestamp];
+        // Get latest prices
+        const timestamps = Object.keys(prices.EUR).map(Number);
+        const latestTimestamp = Math.max(...timestamps);
+        const currentEurPrice = prices.EUR[latestTimestamp];
+        const currentUsdPrice = prices.USD[latestTimestamp];
 
         sortedTxs.forEach(tx => {
             const date = tx.timestamp.toISOString().split('T')[0];
             const txTimestampSeconds = Math.floor(tx.timestamp.getTime() / 1000);
 
-            // Find closest historical price for this date
-            const closestPriceTimestamp = Object.keys(prices)
-                .map(Number)
+            // Find closest historical price
+            const closestPriceTimestamp = timestamps
                 .filter(t => t <= txTimestampSeconds)
                 .reduce((a, b) => Math.abs(b - txTimestampSeconds) < Math.abs(a - txTimestampSeconds) ? b : a);
 
@@ -347,56 +420,77 @@ const CryptoTracker = () => {
                 dailyData[date] = {
                     timestamp: date,
                     valueEur: 0,
+                    valueUsd: 0,
                     depositValueEur: 0,
+                    depositValueUsd: 0,
                     historicalValueEur: 0,
+                    historicalValueUsd: 0,
                     cumulativeValueEur: 0,
+                    cumulativeValueUsd: 0,
                     cumulativeDepositValueEur: 0,
+                    cumulativeDepositValueUsd: 0,
                     cumulativeHistoricalValueEur: 0,
+                    cumulativeHistoricalValueUsd: 0,
                     cumulativeSats: 0,
                 };
             }
 
-            // Calculate the historical portfolio value using the price at that time
-            const historicalPrice = prices[closestPriceTimestamp];
+            const historicalEurPrice = prices.EUR[closestPriceTimestamp];
+            const historicalUsdPrice = prices.USD[closestPriceTimestamp];
+
             dailyData[date].valueEur += tx.currentValueEur;
+            dailyData[date].valueUsd += tx.currentValueUsd;
             dailyData[date].depositValueEur += tx.valueEur;
-            dailyData[date].historicalValueEur = (cumulativeSats * historicalPrice) / 100000000;
+            dailyData[date].depositValueUsd += tx.valueUsd;
+            dailyData[date].historicalValueEur = (cumulativeSats * historicalEurPrice) / 100000000;
+            dailyData[date].historicalValueUsd = (cumulativeSats * historicalUsdPrice) / 100000000;
             dailyData[date].cumulativeSats = cumulativeSats;
         });
 
         // Calculate cumulative values
-        let runningDepositSum = 0;
-        let runningCurrentSum = 0;
+        let runningDepositEur = 0;
+        let runningDepositUsd = 0;
+        let runningCurrentEur = 0;
+        let runningCurrentUsd = 0;
 
+        // Update the relevant part in updateChartData where the chart data is created
         const chartData = Object.values(dailyData)
             .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
             .map(day => {
-                runningDepositSum += day.depositValueEur;
-                runningCurrentSum += day.valueEur;
+                runningDepositEur += day.depositValueEur;
+                runningDepositUsd += day.depositValueUsd;
+                runningCurrentEur += day.valueEur;
+                runningCurrentUsd += day.valueUsd;
                 return {
                     ...day,
-                    cumulativeValueEur: runningCurrentSum,
-                    cumulativeDepositValueEur: runningDepositSum,
-                    cumulativeHistoricalValueEur: day.historicalValueEur // This is already the cumulative value at historical prices
+                    cumulativeValueEur: runningCurrentEur,
+                    cumulativeValueUsd: runningCurrentUsd,
+                    cumulativeDepositValueEur: runningDepositEur,
+                    cumulativeDepositValueUsd: runningDepositUsd,
+                    cumulativeHistoricalValueEur: day.historicalValueEur,
+                    cumulativeHistoricalValueUsd: day.historicalValueUsd
                 };
             });
 
-        // Add current date point if there are any transactions
+// When adding the current date point
         if (chartData.length > 0) {
             const lastEntry = chartData[chartData.length - 1];
             const today = new Date().toISOString().split('T')[0];
 
-            // Only add current date if it's different from the last entry
             if (today !== lastEntry.timestamp) {
                 chartData.push({
+                    ...lastEntry,
                     timestamp: today,
                     valueEur: 0,
+                    valueUsd: 0,
                     depositValueEur: 0,
-                    historicalValueEur: (lastEntry.cumulativeSats * currentPrice) / 100000000,
-                    cumulativeValueEur: lastEntry.cumulativeValueEur,
+                    depositValueUsd: 0,
+                    historicalValueEur: (lastEntry.cumulativeSats * currentEurPrice) / 100000000,
+                    historicalValueUsd: (lastEntry.cumulativeSats * currentUsdPrice) / 100000000,
+                    cumulativeHistoricalValueEur: (lastEntry.cumulativeSats * currentEurPrice) / 100000000,
+                    cumulativeHistoricalValueUsd: (lastEntry.cumulativeSats * currentUsdPrice) / 100000000,
                     cumulativeDepositValueEur: lastEntry.cumulativeDepositValueEur,
-                    cumulativeHistoricalValueEur: (lastEntry.cumulativeSats * currentPrice) / 100000000,
-                    cumulativeSats: lastEntry.cumulativeSats
+                    cumulativeDepositValueUsd: lastEntry.cumulativeDepositValueUsd,
                 });
             }
         }
@@ -413,24 +507,30 @@ const CryptoTracker = () => {
                 yearlyStats[year] = {
                     year,
                     totalValue: 0,
+                    totalValueUsd: 0,
                     deposits: 0,
+                    depositsUsd: 0,
                 };
             }
             yearlyStats[year].totalValue += tx.currentValueEur;
+            yearlyStats[year].totalValueUsd += tx.currentValueUsd;
             yearlyStats[year].deposits += tx.valueEur;
+            yearlyStats[year].depositsUsd += tx.valueUsd;
         });
 
-        // Calculate profit
+        // Calculate profit for both currencies
         const yearlyData = Object.values(yearlyStats).map(stat => ({
             ...stat,
-            profit: stat.deposits > 0
+            profitEur: stat.deposits > 0
                 ? ((stat.totalValue - stat.deposits) / stat.deposits * 100).toFixed(2)
+                : '0.00',
+            profitUsd: stat.depositsUsd > 0
+                ? ((stat.totalValueUsd - stat.depositsUsd) / stat.depositsUsd * 100).toFixed(2)
                 : '0.00'
         }));
 
         setYearlyData(yearlyData);
     };
-
 
 
     // Sort handler for tables
@@ -443,12 +543,21 @@ const CryptoTracker = () => {
 
     // Calculate totals
     const calculateProfitLoss = () => {
-        const totalDeposits = transactions.reduce((sum, tx) => sum + tx.valueEur, 0);
-        const currentValue = transactions.reduce((sum, tx) => sum + tx.currentValueEur, 0);
-        const profitPercentage = totalDeposits ? ((currentValue - totalDeposits) / totalDeposits * 100) : 0;
-        return {totalDeposits, currentValue, profitPercentage};
+        const totalDepositsEur = transactions.reduce((sum, tx) => sum + tx.valueEur, 0);
+        const totalDepositsUsd = transactions.reduce((sum, tx) => sum + tx.valueUsd, 0);
+        const currentValueEur = transactions.reduce((sum, tx) => sum + tx.currentValueEur, 0);
+        const currentValueUsd = transactions.reduce((sum, tx) => sum + tx.currentValueUsd, 0);
+        const profitPercentageEur = totalDepositsEur ? ((currentValueEur - totalDepositsEur) / totalDepositsEur * 100) : 0;
+        const profitPercentageUsd = totalDepositsUsd ? ((currentValueUsd - totalDepositsUsd) / totalDepositsUsd * 100) : 0;
+        return {
+            totalDepositsEur,
+            totalDepositsUsd,
+            currentValueEur,
+            currentValueUsd,
+            profitPercentageEur,
+            profitPercentageUsd
+        };
     };
-
     // Effect to process transactions when addresses change
     useEffect(() => {
         if (addresses.length > 0) {
@@ -497,7 +606,6 @@ const CryptoTracker = () => {
                     </div>
                 </CardHeader>
                 <CardContent>
-                    {/* Rest of your existing JSX */}
                     <div className="space-y-4">
                         {/* Address Input Section */}
                         <div className="flex gap-2">
@@ -582,6 +690,9 @@ const CryptoTracker = () => {
                                     <div className="text-xl font-bold text-center break-all">
                                         €{(transactions.reduce((sum, tx) => sum + tx.valueEur, 0))
                                         .toLocaleString(undefined, {maximumFractionDigits: 0})}
+                                        <br />
+                                        ${(transactions.reduce((sum, tx) => sum + tx.valueUsd, 0))
+                                        .toLocaleString(undefined, {maximumFractionDigits: 0})}
                                     </div>
                                     <div className="text-sm text-gray-500 text-center">Cumulative Deposit Value</div>
                                 </CardContent>
@@ -592,18 +703,23 @@ const CryptoTracker = () => {
                                     <div className="text-xl font-bold text-center break-all">
                                         €{(transactions.reduce((sum, tx) => sum + tx.currentValueEur, 0))
                                         .toLocaleString(undefined, {maximumFractionDigits: 0})}
+                                        <br />
+                                        ${(transactions.reduce((sum, tx) => sum + tx.currentValueUsd, 0))
+                                        .toLocaleString(undefined, {maximumFractionDigits: 0})}
                                     </div>
                                     <div className="text-sm text-gray-500 text-center">Cumulative Current Value</div>
                                 </CardContent>
                             </Card>
-
                             <Card>
                                 <CardContent className="pt-6">
                                     <div className="text-2xl font-bold text-center">
                                         {((transactions.reduce((sum, tx) => sum + tx.currentValueEur, 0) /
                                             transactions.reduce((sum, tx) => sum + tx.valueEur, 0) - 1) * 100).toFixed(2)}%
+                                        <br/>
+                                        {((transactions.reduce((sum, tx) => sum + tx.currentValueUsd, 0) /
+                                            transactions.reduce((sum, tx) => sum + tx.valueUsd, 0) - 1) * 100).toFixed(2)}%
                                     </div>
-                                    <div className="text-sm text-gray-500 text-center">Total Return</div>
+                                    <div className="text-sm text-gray-500 text-center">Total Return (EUR/USD)</div>
                                 </CardContent>
                             </Card>
                         </div>
@@ -620,7 +736,7 @@ const CryptoTracker = () => {
                                             <XAxis dataKey="timestamp"/>
                                             <YAxis
                                                 yAxisId="left"
-                                                label={{value: 'EUR', angle: -90, position: 'insideLeft'}}
+                                                label={{value: 'EUR / USD', angle: -90, position: 'insideLeft'}}
                                             />
                                             <YAxis
                                                 yAxisId="right"
@@ -632,23 +748,56 @@ const CryptoTracker = () => {
                                                     if (name === "Cumulative Sats") {
                                                         return `${value.toLocaleString()} sats`;
                                                     }
-                                                    return `€${value.toLocaleString(undefined, {maximumFractionDigits: 2})}`;
+                                                    return `${name.includes('USD') ? '$' : '€'}${value.toLocaleString(undefined, {maximumFractionDigits: 2})}`;
                                                 }}
                                             />
-                                            <Legend/>
+                                            <Legend
+                                                onClick={handleLegendClick}
+                                                formatter={(value, entry) => {
+                                                    const opacity = visibleLines[{
+                                                        "Portfolio Value (EUR)": "portfolioEUR",
+                                                        "Portfolio Value (USD)": "portfolioUSD",
+                                                        "Deposit Value (EUR)": "depositEUR",
+                                                        "Deposit Value (USD)": "depositUSD",
+                                                        "Cumulative Sats": "sats"
+                                                    }[value]] ? 1 : 0.3;
+
+                                                    return <span style={{ color: entry.color, opacity }}>{value}</span>;
+                                                }}
+                                            />
                                             <Line
                                                 type="monotone"
                                                 dataKey="cumulativeHistoricalValueEur"
                                                 stroke="#2563eb"
-                                                name="Portfolio Value"
+                                                name="Portfolio Value (EUR)"
                                                 yAxisId="left"
+                                                hide={!visibleLines.portfolioEUR}
+                                            />
+                                            <Line
+                                                type="monotone"
+                                                dataKey="cumulativeHistoricalValueUsd"
+                                                stroke="#3b82f6"
+                                                name="Portfolio Value (USD)"
+                                                yAxisId="left"
+                                                strokeDasharray="5 5"
+                                                hide={!visibleLines.portfolioUSD}
                                             />
                                             <Line
                                                 type="monotone"
                                                 dataKey="cumulativeDepositValueEur"
                                                 stroke="#64748b"
-                                                name="Deposit Value"
+                                                name="Deposit Value (EUR)"
                                                 yAxisId="left"
+                                                hide={!visibleLines.depositEUR}
+                                            />
+                                            <Line
+                                                type="monotone"
+                                                dataKey="cumulativeDepositValueUsd"
+                                                stroke="#94a3b8"
+                                                name="Deposit Value (USD)"
+                                                yAxisId="left"
+                                                strokeDasharray="5 5"
+                                                hide={!visibleLines.depositUSD}
                                             />
                                             <Line
                                                 type="monotone"
@@ -656,6 +805,7 @@ const CryptoTracker = () => {
                                                 stroke="#059669"
                                                 name="Cumulative Sats"
                                                 yAxisId="right"
+                                                hide={!visibleLines.sats}
                                             />
                                         </LineChart>
                                     </ResponsiveContainer>
@@ -677,8 +827,8 @@ const CryptoTracker = () => {
                                                     Year <ArrowUpDown className="w-4 h-4 ml-1"/>
                                                 </Button>
                                             </th>
-                                            <th className="text-left p-4">Total Value (EUR)</th>
-                                            <th className="text-left p-4">Deposits (EUR)</th>
+                                            <th className="text-left p-4">Total Value (EUR/USD)</th>
+                                            <th className="text-left p-4">Deposits (EUR/USD)</th>
                                             <th className="text-left p-4">Profit %</th>
                                         </tr>
                                         </thead>
@@ -686,9 +836,21 @@ const CryptoTracker = () => {
                                         {yearlyData.map((year) => (
                                             <tr key={year.year} className="border-b hover:bg-gray-50">
                                                 <td className="p-4">{year.year}</td>
-                                                <td className="p-4">€{year.totalValue.toLocaleString(undefined, {maximumFractionDigits: 2})}</td>
-                                                <td className="p-4">€{year.deposits.toLocaleString(undefined, {maximumFractionDigits: 2})}</td>
-                                                <td className="p-4">{year.profit}%</td>
+                                                <td className="p-4">
+                                                    €{year.totalValue.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                    <br/>
+                                                    ${year.totalValueUsd.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                </td>
+                                                <td className="p-4">
+                                                    €{year.deposits.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                    <br/>
+                                                    ${year.depositsUsd.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                </td>
+                                                <td className="p-4">
+                                                    {year.profitEur}% (EUR)
+                                                    <br/>
+                                                    {year.profitUsd}% (USD)
+                                                </td>
                                             </tr>
                                         ))}
                                         </tbody>
@@ -727,8 +889,8 @@ const CryptoTracker = () => {
                                             </th>
                                             <th className="text-left p-4">Transaction ID</th>
                                             <th className="text-left p-4">Amount (sats)</th>
-                                            <th className="text-left p-4">Value at Transaction (EUR)</th>
-                                            <th className="text-left p-4">Current Value (EUR)</th>
+                                            <th className="text-left p-4">Value at Transaction (EUR / USD)</th>
+                                            <th className="text-left p-4">Current Value (EUR / USD)</th>
                                         </tr>
                                         </thead>
                                         <tbody>
@@ -737,8 +899,16 @@ const CryptoTracker = () => {
                                                 <td className="p-4">{tx.timestamp.toLocaleDateString()}</td>
                                                 <td className="p-4 font-mono text-xs">{tx.txid}</td>
                                                 <td className="p-4">{tx.amount.toLocaleString()}</td>
-                                                <td className="p-4">€{tx.valueEur.toLocaleString(undefined, {maximumFractionDigits: 2})}</td>
-                                                <td className="p-4">€{tx.currentValueEur.toLocaleString(undefined, {maximumFractionDigits: 2})}</td>
+                                                <td className="p-4">
+                                                    €{tx.valueEur.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                    <br/>
+                                                    ${tx.valueUsd.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                </td>
+                                                <td className="p-4">
+                                                    €{tx.currentValueEur.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                    <br/>
+                                                    ${tx.currentValueUsd.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                </td>
                                             </tr>
                                         ))}
                                         </tbody>
