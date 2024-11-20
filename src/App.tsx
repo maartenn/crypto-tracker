@@ -3,10 +3,11 @@ import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Input} from '@/components/ui/input';
 import {Alert, AlertDescription} from './components/ui/alert';
 import {Button} from './components/ui/button';
-import {CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis} from 'recharts';
+import {CartesianGrid, Legend, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis} from 'recharts';
 import {ArrowUpDown, Loader2, Plus, Trash2} from 'lucide-react';
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue,} from "@/components/ui/select";
 import {Progress} from "@/components/ui/progress";
+
 interface Transaction {
     txid: string;
     timestamp: Date;
@@ -18,7 +19,7 @@ interface Transaction {
 }
 
 interface ChartDataPoint {
-    timestamp: string;
+    timestamp: number;
     valueEur: number;
     valueUsd: number;
     depositValueEur: number;
@@ -65,6 +66,7 @@ interface DailyDataPoint {
     cumulativeHistoricalValueUsd: number;
     cumulativeSats: number;
 }
+
 const API_ENDPOINTS = {
     BLOCKSTREAM: 'https://blockstream.info/api',
     COINGECKO: 'https://api.coingecko.com/api/v3'
@@ -90,6 +92,9 @@ const CryptoTracker = () => {
         depositUSD: true,
         sats: true
     });
+    const [startDomain, setStartDomain] = useState(null);
+    const [endDomain, setEndDomain] = useState(null);
+    const [zoomDomain, setZoomDomain] = useState(null);
 
     const handleLegendClick = (entry) => {
         const lineKey = {
@@ -448,12 +453,12 @@ const CryptoTracker = () => {
     };
 
 
-
-
 // The typed function
     const updateChartData = (txs: Transaction[], prices: PriceData): void => {
         const dailyData: { [date: string]: DailyDataPoint } = {};
         let cumulativeSats = 0;
+        let cumulativeDepositEur = 0;
+        let cumulativeDepositUsd = 0;
 
         // Sort transactions by date
         const sortedTxs = [...txs].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
@@ -474,6 +479,8 @@ const CryptoTracker = () => {
                 .reduce((a, b) => Math.abs(b - txTimestampSeconds) < Math.abs(a - txTimestampSeconds) ? b : a);
 
             cumulativeSats += tx.amount;
+            cumulativeDepositEur += tx.valueEur;
+            cumulativeDepositUsd += tx.valueUsd;
 
             if (!dailyData[date]) {
                 dailyData[date] = {
@@ -486,54 +493,42 @@ const CryptoTracker = () => {
                     historicalValueUsd: 0,
                     cumulativeValueEur: 0,
                     cumulativeValueUsd: 0,
-                    cumulativeDepositValueEur: 0,
-                    cumulativeDepositValueUsd: 0,
+                    cumulativeDepositValueEur: cumulativeDepositEur,
+                    cumulativeDepositValueUsd: cumulativeDepositUsd,
                     cumulativeHistoricalValueEur: 0,
                     cumulativeHistoricalValueUsd: 0,
-                    cumulativeSats: 0,
+                    cumulativeSats: cumulativeSats,
                 };
             }
 
             const historicalEurPrice = prices.EUR[closestPriceTimestamp];
             const historicalUsdPrice = prices.USD[closestPriceTimestamp];
 
-            dailyData[date].valueEur += tx.currentValueEur;
-            dailyData[date].valueUsd += tx.currentValueUsd;
-            dailyData[date].depositValueEur += tx.valueEur;
-            dailyData[date].depositValueUsd += tx.valueUsd;
+            dailyData[date].valueEur += tx.valueEur;
+            dailyData[date].valueUsd += tx.valueUsd;
+            dailyData[date].depositValueEur = tx.valueEur;
+            dailyData[date].depositValueUsd = tx.valueUsd;
             dailyData[date].historicalValueEur = (cumulativeSats * historicalEurPrice) / 100000000;
             dailyData[date].historicalValueUsd = (cumulativeSats * historicalUsdPrice) / 100000000;
+            dailyData[date].cumulativeDepositValueEur = cumulativeDepositEur;
+            dailyData[date].cumulativeDepositValueUsd = cumulativeDepositUsd;
             dailyData[date].cumulativeSats = cumulativeSats;
         });
 
-        // Calculate cumulative values
-        let runningDepositEur = 0;
-        let runningDepositUsd = 0;
-        let runningCurrentEur = 0;
-        let runningCurrentUsd = 0;
-
+        // Convert to array and sort by date
         const chartData = Object.values(dailyData)
             .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-            .map(day => {
-                runningDepositEur += day.depositValueEur;
-                runningDepositUsd += day.depositValueUsd;
-                runningCurrentEur += day.valueEur;
-                runningCurrentUsd += day.valueUsd;
-                return {
-                    ...day,
-                    cumulativeValueEur: runningCurrentEur,
-                    cumulativeValueUsd: runningCurrentUsd,
-                    cumulativeDepositValueEur: runningDepositEur,
-                    cumulativeDepositValueUsd: runningDepositUsd,
-                    cumulativeHistoricalValueEur: day.historicalValueEur,
-                    cumulativeHistoricalValueUsd: day.historicalValueUsd
-                };
-            });
+            .map(day => ({
+                ...day,
+                timestamp: new Date(day.timestamp).getTime(),
+                cumulativeHistoricalValueEur: day.historicalValueEur,
+                cumulativeHistoricalValueUsd: day.historicalValueUsd
+            }));
 
-        // Add current date point if needed
+        // Add current day if needed
         if (chartData.length > 0) {
             const lastEntry = chartData[chartData.length - 1];
-            const today = new Date().toISOString().split('T')[0];
+            const today = new Date().getTime();
 
             if (today !== lastEntry.timestamp) {
                 chartData.push({
@@ -547,8 +542,6 @@ const CryptoTracker = () => {
                     historicalValueUsd: (lastEntry.cumulativeSats * currentUsdPrice) / 100000000,
                     cumulativeHistoricalValueEur: (lastEntry.cumulativeSats * currentEurPrice) / 100000000,
                     cumulativeHistoricalValueUsd: (lastEntry.cumulativeSats * currentUsdPrice) / 100000000,
-                    cumulativeDepositValueEur: lastEntry.cumulativeDepositValueEur,
-                    cumulativeDepositValueUsd: lastEntry.cumulativeDepositValueUsd,
                 });
             }
         }
@@ -649,7 +642,6 @@ const CryptoTracker = () => {
         }
     }, [addresses]);
 
-    
 
     // Sort and filter transactions for display
     const getSortedTransactions = () => {
@@ -666,6 +658,70 @@ const CryptoTracker = () => {
             return aValue < bValue ? 1 : -1;
         });
     };
+    const getVisibleData = () => {
+        if (!chartData.length) return { valueMin: 0, valueMax: 0, satsMin: 0, satsMax: 0 };
+
+        const visibleData = chartData.filter(point => {
+            if (!zoomDomain) return true;
+            return point.timestamp >= zoomDomain[0] && point.timestamp <= zoomDomain[1];
+        });
+
+        const values = visibleData.flatMap(point => {
+            const points = [];
+            if (visibleLines.portfolioEUR) points.push(point.cumulativeHistoricalValueEur);
+            if (visibleLines.portfolioUSD) points.push(point.cumulativeHistoricalValueUsd);
+            if (visibleLines.depositEUR) points.push(point.cumulativeDepositValueEur);
+            if (visibleLines.depositUSD) points.push(point.cumulativeDepositValueUsd);
+            return points;
+        });
+
+        const satsValues = visibleData.flatMap(point =>
+            visibleLines.sats ? [point.cumulativeSats] : []
+        );
+
+        return {
+            valueMin: values.length ? Math.min(...values) : 0,
+            valueMax: values.length ? Math.max(...values) : 0,
+            satsMin: satsValues.length ? Math.min(...satsValues) : 0,
+            satsMax: satsValues.length ? Math.max(...satsValues) : 0
+        };
+    };
+
+    const handleChartMouseDown = (e) => {
+        if (e && e.activeLabel) {
+            try {
+                // Validate that the timestamp is valid before using it
+                const timestamp = new Date(e.activeLabel).getTime();
+                if (!isNaN(timestamp)) {
+                    setStartDomain(e.activeLabel);
+                    console.log('MouseDown:', {
+                        domain: e.activeLabel,
+                        timestamp: new Date(e.activeLabel).toISOString()
+                    });
+                }
+            } catch (error) {
+                console.error('Invalid timestamp:', e.activeLabel);
+            }
+        }
+    };
+
+    const handleChartMouseMove = (e) => {
+        if (startDomain && e && e.activeLabel) {
+            try {
+                // Validate that the timestamp is valid before using it
+                const timestamp = new Date(e.activeLabel).getTime();
+                if (!isNaN(timestamp) && e.activeLabel !== endDomain) {
+                    setEndDomain(e.activeLabel);
+                }
+            } catch (error) {
+                console.error('Invalid timestamp:', e.activeLabel);
+            }
+        }
+    };
+    // Bereken visibleRange één keer voor de render
+    const visibleRange = getVisibleData();
+    console.log('Visible range:', visibleRange);
+
     return (
         <div className="max-w-6xl mx-auto p-4 space-y-6">
             <Card>
@@ -774,7 +830,7 @@ const CryptoTracker = () => {
                                     <div className="text-xl font-bold text-center break-all">
                                         €{(transactions.reduce((sum, tx) => sum + tx.valueEur, 0))
                                         .toLocaleString(undefined, {maximumFractionDigits: 0})}
-                                        <br />
+                                        <br/>
                                         ${(transactions.reduce((sum, tx) => sum + tx.valueUsd, 0))
                                         .toLocaleString(undefined, {maximumFractionDigits: 0})}
                                     </div>
@@ -787,7 +843,7 @@ const CryptoTracker = () => {
                                     <div className="text-xl font-bold text-center break-all">
                                         €{(transactions.reduce((sum, tx) => sum + tx.currentValueEur, 0))
                                         .toLocaleString(undefined, {maximumFractionDigits: 0})}
-                                        <br />
+                                        <br/>
                                         ${(transactions.reduce((sum, tx) => sum + tx.currentValueUsd, 0))
                                         .toLocaleString(undefined, {maximumFractionDigits: 0})}
                                     </div>
@@ -815,25 +871,93 @@ const CryptoTracker = () => {
                             <CardContent>
                                 <div className="h-[400px]">
                                     <ResponsiveContainer width="100%" height="100%">
-                                        <LineChart data={chartData}>
+                                        <LineChart
+                                            data={chartData}
+                                            onMouseDown={handleChartMouseDown}
+                                            onMouseMove={handleChartMouseMove}
+                                            onMouseUp={() => {
+                                                if (startDomain && endDomain) {
+                                                    try {
+                                                        const start = new Date(startDomain).getTime();
+                                                        const end = new Date(endDomain).getTime();
+                                                        if (!isNaN(start) && !isNaN(end)) {
+                                                            const newDomain = [Math.min(start, end), Math.max(start, end)];
+                                                            setZoomDomain(newDomain);
+                                                        }
+                                                    } catch (error) {
+                                                        console.error('Invalid domain:', { startDomain, endDomain });
+                                                    }
+                                                }
+                                                setStartDomain(null);
+                                                setEndDomain(null);
+                                            }}
+                                        >
                                             <CartesianGrid strokeDasharray="3 3"/>
-                                            <XAxis dataKey="timestamp"/>
+                                            <XAxis
+                                                dataKey="timestamp"
+                                                domain={zoomDomain || ['dataMin', 'dataMax']}
+                                                type="number"
+                                                scale="time"
+                                                tickFormatter={(timestamp) => new Date(timestamp).toLocaleDateString()}
+                                                allowDataOverflow={true}  // Add this line
+                                            />
                                             <YAxis
                                                 yAxisId="left"
                                                 label={{value: 'EUR / USD', angle: -90, position: 'insideLeft'}}
+                                                domain={[
+                                                    visibleRange.valueMin * 0.9995,
+                                                    visibleRange.valueMax * 1.0005
+                                                ]} // We'll let it auto-scale based on visible data
+                                                allowDataOverflow={true}
+                                                scale="linear"  // Add this line
+                                                hide={!visibleLines.portfolioEUR && !visibleLines.portfolioUSD && !visibleLines.depositEUR && !visibleLines.depositUSD}
+
+                                                tickFormatter={(value) => {
+                                                    if (value >= 1000000) {
+                                                        return `${(value / 1000000).toFixed(1)}M`;
+                                                    } else if (value >= 1000) {
+                                                        return `${(value / 1000).toFixed(1)}k`;
+                                                    }
+                                                    return value.toFixed(0);
+                                                }}
                                             />
                                             <YAxis
                                                 yAxisId="right"
                                                 orientation="right"
                                                 label={{value: 'Sats', angle: 90, position: 'insideRight'}}
+                                                domain={[
+                                                    visibleRange.satsMin * 0.9995,
+                                                    visibleRange.satsMax * 1.0005
+                                                ]}
+                                                allowDataOverflow={true}
+                                                scale="linear"
+                                                hide={!visibleLines.sats}
+                                                tickFormatter={(value) => {
+                                                    if (value >= 1000000) {
+                                                        return `${(value / 1000000).toFixed(1)}M`;
+                                                    } else if (value >= 1000) {
+                                                        return `${(value / 1000).toFixed(1)}k`;
+                                                    }
+                                                    return value.toFixed(0);
+                                                }}
                                             />
                                             <Tooltip
                                                 formatter={(value: number, name: string) => {
                                                     if (name === "Cumulative Sats") {
                                                         return `${value.toLocaleString()} sats`;
                                                     }
+                                                    // Aangepaste namen voor de deposit values
+                                                    const formattedName = {
+                                                        "cumulativeDepositValueEur": "Deposit Value (EUR)",
+                                                        "cumulativeDepositValueUsd": "Deposit Value (USD)",
+                                                        "cumulativeHistoricalValueEur": "Portfolio Value (EUR)",
+                                                        "cumulativeHistoricalValueUsd": "Portfolio Value (USD)",
+                                                        "cumulativeSats": "Cumulative Sats"
+                                                    }[name] || name;
+
                                                     return `${String(name).includes('USD') ? '$' : '€'}${value.toLocaleString(undefined, {maximumFractionDigits: 2})}`;
                                                 }}
+                                                labelFormatter={(label) => new Date(label).toLocaleDateString()}
                                             />
                                             <Legend
                                                 onClick={handleLegendClick}
@@ -846,7 +970,7 @@ const CryptoTracker = () => {
                                                         "Cumulative Sats": "sats"
                                                     }[value]] ? 1 : 0.3;
 
-                                                    return <span style={{ color: entry.color, opacity }}>{value}</span>;
+                                                    return <span style={{color: entry.color, opacity}}>{value}</span>;
                                                 }}
                                             />
                                             <Line
@@ -867,7 +991,7 @@ const CryptoTracker = () => {
                                                 hide={!visibleLines.portfolioUSD}
                                             />
                                             <Line
-                                                type="monotone"
+                                                type="stepAfter"
                                                 dataKey="cumulativeDepositValueEur"
                                                 stroke="#64748b"
                                                 name="Deposit Value (EUR)"
@@ -875,7 +999,7 @@ const CryptoTracker = () => {
                                                 hide={!visibleLines.depositEUR}
                                             />
                                             <Line
-                                                type="monotone"
+                                                type="stepAfter"
                                                 dataKey="cumulativeDepositValueUsd"
                                                 stroke="#94a3b8"
                                                 name="Deposit Value (USD)"
@@ -884,15 +1008,52 @@ const CryptoTracker = () => {
                                                 hide={!visibleLines.depositUSD}
                                             />
                                             <Line
-                                                type="monotone"
+                                                type="stepAfter"
                                                 dataKey="cumulativeSats"
                                                 stroke="#059669"
                                                 name="Cumulative Sats"
                                                 yAxisId="right"
                                                 hide={!visibleLines.sats}
                                             />
+                                            {startDomain && endDomain && (
+                                                <ReferenceArea
+                                                    yAxisId="left"
+                                                    x1={startDomain}
+                                                    x2={endDomain}
+                                                    fillOpacity={0.2}
+                                                    fill="#8884d8"
+                                                />
+                                            )}
+
+                                                {console.log('Chart data:', {
+                                                        visibleData: chartData.map(point => ({
+                                                            timestamp: new Date(point.timestamp).toISOString(),
+                                                            eur: point.cumulativeHistoricalValueEur,
+                                                            usd: point.cumulativeHistoricalValueUsd,
+                                                            sats: point.cumulativeSats
+                                                        })),
+                                                        visibleLines,
+                                                        zoomDomain
+                                                    })}
+
                                         </LineChart>
+
                                     </ResponsiveContainer>
+                                    {zoomDomain && (
+                                        <div className="flex justify-end mt-2">
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => {
+                                                    console.log('Resetting zoom');
+                                                    setZoomDomain(null);
+                                                }}
+                                            >
+                                                Reset Zoom
+                                            </Button>
+                                        </div>
+                                    )}
+
                                 </div>
                             </CardContent>
                         </Card>
