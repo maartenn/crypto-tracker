@@ -68,9 +68,62 @@ interface DailyDataPoint {
 }
 
 const API_ENDPOINTS = {
-    BLOCKSTREAM: 'https://blockstream.info/api',
-    COINGECKO: 'https://api.coingecko.com/api/v3'
+    BLOCKSTREAM: 'https://blockstream.info/api'
 };
+
+const CurrencyToggle = ({ value, onChange }) => {
+    return (
+        <div className="flex justify-center my-6">
+            <div className="relative bg-gray-100 p-1 rounded-lg inline-flex">
+                <div
+                    className={`
+            absolute h-8 top-1 transition-all duration-200 ease-out rounded-md bg-white shadow-sm
+            ${value === 'EUR' ? 'left-1 w-[90px]' : ''}
+            ${value === 'BOTH' ? 'left-[92px] w-[90px]' : ''}
+            ${value === 'USD' ? 'left-[183px] w-[90px]' : ''}
+          `}
+                />
+                <button
+                    onClick={() => onChange('EUR')}
+                    className={`
+            relative w-[90px] py-1.5 rounded-md text-sm font-medium transition-colors duration-200
+            ${value === 'EUR' ? 'text-gray-900' : 'text-gray-600 hover:text-gray-900'}
+          `}
+                >
+          <span className="flex items-center justify-center gap-1">
+            <span>€</span>
+            <span>EUR</span>
+          </span>
+                </button>
+                <button
+                    onClick={() => onChange('BOTH')}
+                    className={`
+            relative w-[90px] py-1.5 rounded-md text-sm font-medium transition-colors duration-200
+            ${value === 'BOTH' ? 'text-gray-900' : 'text-gray-600 hover:text-gray-900'}
+          `}
+                >
+          <span className="flex items-center justify-center gap-1">
+            <span>€/$</span>
+            <span>Both</span>
+          </span>
+                </button>
+                <button
+                    onClick={() => onChange('USD')}
+                    className={`
+            relative w-[90px] py-1.5 rounded-md text-sm font-medium transition-colors duration-200
+            ${value === 'USD' ? 'text-gray-900' : 'text-gray-600 hover:text-gray-900'}
+          `}
+                >
+          <span className="flex items-center justify-center gap-1">
+            <span>$</span>
+            <span>USD</span>
+          </span>
+                </button>
+            </div>
+        </div>
+    );
+};
+
 const CryptoTracker = () => {
     const [addresses, setAddresses] = useState([]);
     const [newAddress, setNewAddress] = useState('');
@@ -84,17 +137,86 @@ const CryptoTracker = () => {
     const [filterYear, setFilterYear] = useState('all');
     const [loadingProgress, setLoadingProgress] = useState(0);
     const [loadingStatus, setLoadingStatus] = useState('');
-// Add a new state at the top of your component to track visible lines
-    const [visibleLines, setVisibleLines] = useState({
-        portfolioEUR: true,
-        portfolioUSD: true,
-        depositEUR: true,
-        depositUSD: true,
-        sats: true
+    const [currencyPreference, setCurrencyPreference] = useState(() => {
+        const locale = navigator.language.toUpperCase();
+        const eurCountries = [
+            'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'AT', 'IE', 'FI', 'GR', // Original list
+            'PT', 'LU', 'SK', 'SI', 'EE', 'LV', 'LT', 'CY', 'MT', // Additional Eurozone members
+            'HR', 'AD', 'MC', 'SM', 'VA', // More EUR-using countries
+            'ME', 'XK', // Montenegro and Kosovo (unilaterally use EUR)
+            'GP', 'MQ', 'GF', 'RE', 'YT', 'PM', 'BL', 'MF', // French territories
+            'AW', 'CW', 'SX', 'BQ' // Dutch Caribbean territories
+        ];
+        return eurCountries.some(country => locale.includes(country)) ? 'EUR' : 'USD';
     });
+    const [visibleLines, setVisibleLines] = useState({
+        portfolioEUR: currencyPreference !== 'USD',
+        portfolioUSD: currencyPreference !== 'EUR',
+        depositEUR: currencyPreference !== 'USD',
+        depositUSD: currencyPreference !== 'EUR',
+        sats: false
+    });
+    // Add this function to calculate tick interval based on visible data points
+    const calculateTickInterval = () => {
+        if (!chartData.length) return 50;
+
+        const visibleData = chartData.filter(point => {
+            if (!zoomDomain) return true;
+            return point.timestamp >= zoomDomain[0] && point.timestamp <= zoomDomain[1];
+        });
+
+        // Calculate the width each tick would take (assuming about 70px per date)
+        const containerWidth = 800; // Approximate chart width
+        const dateWidth = 100; // Approximate width needed for a date
+        const maxTicks = Math.floor(containerWidth / dateWidth);
+
+        // Calculate how many data points we should skip
+        return Math.ceil(visibleData.length / maxTicks);
+    };
+
+// Add this function to generate appropriate ticks
+    const generateTicks = () => {
+        if (!chartData.length) return [];
+
+        const visibleData = chartData.filter(point => {
+            if (!zoomDomain) return true;
+            return point.timestamp >= zoomDomain[0] && point.timestamp <= zoomDomain[1];
+        }).map(point => point.timestamp);
+
+        if (visibleData.length <= 1) return visibleData;
+
+        const interval = calculateTickInterval();
+        const ticks = [];
+
+        for (let i = 0; i < visibleData.length; i += interval) {
+            ticks.push(visibleData[i]);
+        }
+
+        // Always include the last point if it's not already included
+        if (ticks[ticks.length - 1] !== visibleData[visibleData.length - 1]) {
+            ticks.push(visibleData[visibleData.length - 1]);
+        }
+
+        return ticks;
+    };
+
     const [startDomain, setStartDomain] = useState(null);
     const [endDomain, setEndDomain] = useState(null);
     const [zoomDomain, setZoomDomain] = useState(null);
+
+    const getTickCount = () => {
+        if (!chartData.length || !zoomDomain) return 5;
+
+        const visiblePoints = chartData.filter(point =>
+            point.timestamp >= zoomDomain[0] && point.timestamp <= zoomDomain[1]
+        ).length;
+
+        if (visiblePoints <= 2) return visiblePoints;
+
+        const timeRange = zoomDomain[1] - zoomDomain[0];
+        const dayRange = timeRange / (24 * 60 * 60 * 1000);
+        return dayRange <= 7 ? dayRange : 5;
+    };
 
     const handleLegendClick = (entry) => {
         const lineKey = {
@@ -119,6 +241,15 @@ const CryptoTracker = () => {
             });
         }
     };
+    useEffect(() => {
+        setVisibleLines(prev => ({
+            ...prev,
+            portfolioEUR: currencyPreference !== 'USD',
+            portfolioUSD: currencyPreference !== 'EUR',
+            depositEUR: currencyPreference !== 'USD',
+            depositUSD: currencyPreference !== 'EUR'
+        }));
+    }, [currencyPreference]);
 
 // Enhanced legend style
     const legendStyle = {
@@ -718,10 +849,61 @@ const CryptoTracker = () => {
             }
         }
     };
+    const handleChartMouseUp = () => {
+        if (startDomain && endDomain) {
+            try {
+                const start = new Date(startDomain).getTime();
+                const end = new Date(endDomain).getTime();
+                if (!isNaN(start) && !isNaN(end)) {
+                    // Get all unique timestamps from the data
+                    const timestamps = [...new Set(chartData.map(point => point.timestamp))].sort((a, b) => a - b);
+
+                    // If we have more than one point in total
+                    if (timestamps.length > 1) {
+                        const newStart = Math.min(start, end);
+                        const newEnd = Math.max(start, end);
+
+                        // Find the points within the selected range
+                        const pointsInRange = timestamps.filter(t => t >= newStart && t <= newEnd);
+
+                        // If less than 2 points are selected, expand the range
+                        if (pointsInRange.length < 2) {
+                            // Find the index of the closest point to the selection
+                            const closestIndex = timestamps.findIndex(t => t >= newStart);
+
+                            // If we're closer to the end of the dataset, look backwards
+                            if (closestIndex === timestamps.length - 1) {
+                                // We're at the last point, so take the previous point
+                                const rangeStart = timestamps[timestamps.length - 2];
+                                const rangeEnd = timestamps[timestamps.length - 1];
+                                setZoomDomain([rangeStart, rangeEnd]);
+                            } else {
+                                // We're not at the last point, so take the next point
+                                const rangeStart = timestamps[Math.max(0, closestIndex)];
+                                const rangeEnd = timestamps[Math.min(timestamps.length - 1, closestIndex + 1)];
+                                setZoomDomain([rangeStart, rangeEnd]);
+                            }
+                        } else {
+                            setZoomDomain([newStart, newEnd]);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Invalid domain:', { startDomain, endDomain });
+            }
+        }
+        setStartDomain(null);
+        setEndDomain(null);
+    };
     // Bereken visibleRange één keer voor de render
     const visibleRange = getVisibleData();
     console.log('Visible range:', visibleRange);
-
+    const shouldShowDots = () => {
+        if (!chartData.length || !zoomDomain) return false;
+        const timeRange = zoomDomain[1] - zoomDomain[0];
+        const dayRange = timeRange / (24 * 60 * 60 * 1000);
+        return dayRange <= 1;
+    };
     return (
         <div className="max-w-6xl mx-auto p-4 space-y-6">
             <Card>
@@ -805,6 +987,10 @@ const CryptoTracker = () => {
                         )}
                         {/* Summary Statistics */}
                         {/* Update the summary cards section */}
+                        <CurrencyToggle
+                            value={currencyPreference}
+                            onChange={setCurrencyPreference}
+                        />
                         <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                             <Card>
                                 <CardContent className="pt-6">
@@ -828,11 +1014,15 @@ const CryptoTracker = () => {
                             <Card>
                                 <CardContent className="pt-6">
                                     <div className="text-xl font-bold text-center break-all">
-                                        €{(transactions.reduce((sum, tx) => sum + tx.valueEur, 0))
-                                        .toLocaleString(undefined, {maximumFractionDigits: 0})}
-                                        <br/>
-                                        ${(transactions.reduce((sum, tx) => sum + tx.valueUsd, 0))
-                                        .toLocaleString(undefined, {maximumFractionDigits: 0})}
+                                        {currencyPreference !== 'USD' && (
+                                            <>€{(transactions.reduce((sum, tx) => sum + tx.valueEur, 0))
+                                                .toLocaleString(undefined, {maximumFractionDigits: 0})}</>
+                                        )}
+                                        {currencyPreference === 'BOTH' && <br />}
+                                        {currencyPreference !== 'EUR' && (
+                                            <>${(transactions.reduce((sum, tx) => sum + tx.valueUsd, 0))
+                                                .toLocaleString(undefined, {maximumFractionDigits: 0})}</>
+                                        )}
                                     </div>
                                     <div className="text-sm text-gray-500 text-center">Cumulative Deposit Value</div>
                                 </CardContent>
@@ -841,11 +1031,15 @@ const CryptoTracker = () => {
                             <Card>
                                 <CardContent className="pt-6">
                                     <div className="text-xl font-bold text-center break-all">
-                                        €{(transactions.reduce((sum, tx) => sum + tx.currentValueEur, 0))
-                                        .toLocaleString(undefined, {maximumFractionDigits: 0})}
-                                        <br/>
-                                        ${(transactions.reduce((sum, tx) => sum + tx.currentValueUsd, 0))
-                                        .toLocaleString(undefined, {maximumFractionDigits: 0})}
+                                        {currencyPreference !== 'USD' && (
+                                            <>€{(transactions.reduce((sum, tx) => sum + tx.currentValueEur, 0))
+                                                .toLocaleString(undefined, {maximumFractionDigits: 0})}</>
+                                        )}
+                                        {currencyPreference === 'BOTH' && <br />}
+                                        {currencyPreference !== 'EUR' && (
+                                            <>${(transactions.reduce((sum, tx) => sum + tx.currentValueUsd, 0))
+                                                .toLocaleString(undefined, {maximumFractionDigits: 0})}</>
+                                        )}
                                     </div>
                                     <div className="text-sm text-gray-500 text-center">Cumulative Current Value</div>
                                 </CardContent>
@@ -853,13 +1047,20 @@ const CryptoTracker = () => {
                             <Card>
                                 <CardContent className="pt-6">
                                     <div className="text-2xl font-bold text-center">
-                                        {((transactions.reduce((sum, tx) => sum + tx.currentValueEur, 0) /
-                                            transactions.reduce((sum, tx) => sum + tx.valueEur, 0) - 1) * 100).toFixed(2)}%
-                                        <br/>
-                                        {((transactions.reduce((sum, tx) => sum + tx.currentValueUsd, 0) /
-                                            transactions.reduce((sum, tx) => sum + tx.valueUsd, 0) - 1) * 100).toFixed(2)}%
+                                        {currencyPreference !== 'USD' && (
+                                            <>{((transactions.reduce((sum, tx) => sum + tx.currentValueEur, 0) /
+                                                transactions.reduce((sum, tx) => sum + tx.valueEur, 0) - 1) * 100).toFixed(2)}%</>
+                                        )}
+                                        {currencyPreference === 'BOTH' && <br />}
+                                        {currencyPreference !== 'EUR' && (
+                                            <>{((transactions.reduce((sum, tx) => sum + tx.currentValueUsd, 0) /
+                                                transactions.reduce((sum, tx) => sum + tx.valueUsd, 0) - 1) * 100).toFixed(2)}%</>
+                                        )}
                                     </div>
-                                    <div className="text-sm text-gray-500 text-center">Total Return (EUR/USD)</div>
+                                    <div className="text-sm text-gray-500 text-center">
+                                        Total Return {currencyPreference === 'BOTH' ? '(EUR/USD)' :
+                                        currencyPreference === 'EUR' ? '(EUR)' : '(USD)'}
+                                    </div>
                                 </CardContent>
                             </Card>
                         </div>
@@ -875,22 +1076,8 @@ const CryptoTracker = () => {
                                             data={chartData}
                                             onMouseDown={handleChartMouseDown}
                                             onMouseMove={handleChartMouseMove}
-                                            onMouseUp={() => {
-                                                if (startDomain && endDomain) {
-                                                    try {
-                                                        const start = new Date(startDomain).getTime();
-                                                        const end = new Date(endDomain).getTime();
-                                                        if (!isNaN(start) && !isNaN(end)) {
-                                                            const newDomain = [Math.min(start, end), Math.max(start, end)];
-                                                            setZoomDomain(newDomain);
-                                                        }
-                                                    } catch (error) {
-                                                        console.error('Invalid domain:', { startDomain, endDomain });
-                                                    }
-                                                }
-                                                setStartDomain(null);
-                                                setEndDomain(null);
-                                            }}
+                                            onMouseUp={handleChartMouseUp}
+                                            margin={{right: 40 }}
                                         >
                                             <CartesianGrid strokeDasharray="3 3"/>
                                             <XAxis
@@ -899,7 +1086,9 @@ const CryptoTracker = () => {
                                                 type="number"
                                                 scale="time"
                                                 tickFormatter={(timestamp) => new Date(timestamp).toLocaleDateString()}
-                                                allowDataOverflow={true}  // Add this line
+                                                allowDataOverflow={true}
+                                                ticks={generateTicks()}
+                                                interval={0}
                                             />
                                             <YAxis
                                                 yAxisId="left"
@@ -979,7 +1168,11 @@ const CryptoTracker = () => {
                                                 stroke="#2563eb"
                                                 name="Portfolio Value (EUR)"
                                                 yAxisId="left"
-                                                hide={!visibleLines.portfolioEUR}
+                                                strokeDasharray="5 5"
+                                                hide={!visibleLines.portfolioEUR || currencyPreference === 'USD'}
+                                                dot={shouldShowDots()}
+
+
                                             />
                                             <Line
                                                 type="monotone"
@@ -988,7 +1181,9 @@ const CryptoTracker = () => {
                                                 name="Portfolio Value (USD)"
                                                 yAxisId="left"
                                                 strokeDasharray="5 5"
-                                                hide={!visibleLines.portfolioUSD}
+                                                hide={!visibleLines.portfolioUSD || currencyPreference === 'EUR'}
+                                                dot={shouldShowDots()}
+
                                             />
                                             <Line
                                                 type="stepAfter"
@@ -996,7 +1191,9 @@ const CryptoTracker = () => {
                                                 stroke="#64748b"
                                                 name="Deposit Value (EUR)"
                                                 yAxisId="left"
-                                                hide={!visibleLines.depositEUR}
+                                                hide={!visibleLines.portfolioEUR || currencyPreference === 'USD'}
+                                                dot={shouldShowDots()}
+
                                             />
                                             <Line
                                                 type="stepAfter"
@@ -1004,8 +1201,9 @@ const CryptoTracker = () => {
                                                 stroke="#94a3b8"
                                                 name="Deposit Value (USD)"
                                                 yAxisId="left"
-                                                strokeDasharray="5 5"
-                                                hide={!visibleLines.depositUSD}
+                                                hide={!visibleLines.portfolioUSD || currencyPreference === 'EUR'}
+                                                dot={shouldShowDots()}
+
                                             />
                                             <Line
                                                 type="stepAfter"
@@ -1082,30 +1280,50 @@ const CryptoTracker = () => {
                                             <tr key={year.year} className="border-b hover:bg-gray-50">
                                                 <td className="p-4">{year.year}</td>
                                                 <td className="p-4">
-                                                    €{year.totalValue.toLocaleString(undefined, {maximumFractionDigits: 2})}
-                                                    <br/>
-                                                    ${year.totalValueUsd.toLocaleString(undefined, {maximumFractionDigits: 2})}
-                                                </td>
-                                                <td className="p-4">
-                                                    €{year.deposits.toLocaleString(undefined, {maximumFractionDigits: 2})}
-                                                    <br/>
-                                                    ${year.depositsUsd.toLocaleString(undefined, {maximumFractionDigits: 2})}
-                                                </td>
-                                                <td className="p-4">
-                                                    {year.profitEur}% (EUR)
-                                                    <br/>
-                                                    {year.profitUsd}% (USD)
-                                                </td>
-                                            </tr>
-                                        ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </CardContent>
-                        </Card>
+                                                    {currencyPreference !== 'USD' && (
+                                                        <>€{year.totalValue.toLocaleString(undefined, {maximumFractionDigits: 2})}</>
+                                                    )}
+                                                    {currencyPreference === 'BOTH' && <br/>}
+                                                    {currencyPreference !== 'EUR' && (
+                                                        <>${year.totalValueUsd.toLocaleString(undefined, {maximumFractionDigits: 2})}</>
+                                                    )}
+                                            </td>
+                                            <td className="p-4">
+                                                {currencyPreference !== 'USD' && (
+                                                    <>€{year.deposits.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                    </>
+                                                )}
+                                                {currencyPreference === 'BOTH' && <br/>}
+                                                {currencyPreference !== 'EUR' && (
+                                                    <>${year.depositsUsd.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                    </>
+                                                )}
+                                        <br/>
+                                        </td>
+                                        <td className="p-4">
+                                            {currencyPreference !== 'USD' && (
+                                                <>{year.profitEur}% (EUR)
+                                                </>
+                                            )}
+                                            {currencyPreference === 'BOTH' && <br/>}
+                                            {currencyPreference !== 'EUR' && (
+                                                <>{year.profitUsd}% (USD)
+                                                </>
+                                            )}
 
-                        {/* Transaction History */}
-                        <Card>
+                                            <br/>
+
+                                        </td>
+                                    </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                    </div>
+                </CardContent>
+            </Card>
+
+            {/* Transaction History */}
+            <Card>
                             <CardHeader>
                                 <CardTitle>Transaction History</CardTitle>
                                 <div className="flex items-center gap-4">
@@ -1145,14 +1363,28 @@ const CryptoTracker = () => {
                                                 <td className="p-4 font-mono text-xs">{tx.txid}</td>
                                                 <td className="p-4">{tx.amount.toLocaleString()}</td>
                                                 <td className="p-4">
-                                                    €{tx.valueEur.toLocaleString(undefined, {maximumFractionDigits: 2})}
-                                                    <br/>
-                                                    ${tx.valueUsd.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                    {currencyPreference !== 'USD' && (
+                                                        <>€{tx.valueEur.toLocaleString(undefined, {maximumFractionDigits: 2})}
+
+                                                        </>
+                                                    )}
+                                                    {currencyPreference === 'BOTH' && <br/>}
+                                                    {currencyPreference !== 'EUR' && (
+                                                        <>${tx.valueUsd.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                        </>
+                                                    )}
                                                 </td>
                                                 <td className="p-4">
-                                                    €{tx.currentValueEur.toLocaleString(undefined, {maximumFractionDigits: 2})}
-                                                    <br/>
-                                                    ${tx.currentValueUsd.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                    {currencyPreference !== 'USD' && (
+                                                        <>€{tx.currentValueEur.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                        </>
+                                                    )}
+                                                    {currencyPreference === 'BOTH' && <br/>}
+                                                    {currencyPreference !== 'EUR' && (
+                                                        <>${tx.currentValueUsd.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                        </>
+                                                    )}
+
                                                 </td>
                                             </tr>
                                         ))}
